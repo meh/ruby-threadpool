@@ -11,16 +11,36 @@
 require 'forwardable'
 require 'thread'
 
+module Awakenable
+	def sleep (time = nil)
+		@awakenable ||= IO.pipe
+
+		@awakenable.first.read_nonblock 1337 rescue nil
+
+		unless @awakened
+			IO.select([@awakenable.first], nil, nil, time)
+		else
+			@awakened = false
+		end
+	end
+
+	def wake_up
+		@awakenable ||= IO.pipe
+
+		@awakenable.last.write 'x'
+		@awakened = true
+	end
+end
+
 class ThreadPool
 	class Worker
+		include Awakenable
+
 		def initialize (watcher = nil)
 			@watcher = watcher
-			@pipes   = IO.pipe
 			@mutex   = Mutex.new
 
 			@thread = Thread.new {
-				begin
-
 				loop do
 					if @block
 						@block.call(*@args) rescue nil
@@ -34,10 +54,6 @@ class ThreadPool
 
 						break if die?
 					end
-				end
-
-				rescue Exception => e
-					ap e
 				end
 			}
 		end
@@ -59,28 +75,13 @@ class ThreadPool
 			}
 		end
 
-		def sleep (time = nil)
-			return if die?
-
-			@pipes.first.read_nonblock 1337 rescue nil
-
-			unless @awakened
-				IO.select([@pipes.first], nil, nil, time)
-			else
-				@awakened = false
-			end
-		end
-
-		def wake_up
-			@pipes.last.write 'x'
-			@awakened = true
-		end
-
 		def join
 			@thread.join
 		end
 
 		def kill
+			return if die?
+
 			@die = true
 			wake_up
 		end
