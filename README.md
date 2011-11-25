@@ -4,7 +4,7 @@ All the implementations I looked at were either buggy or wasted CPU resources
 for no apparent reason, for example used a sleep of 0.01 seconds to then check for
 readiness and stuff like this.
 
-This implementation uses `IO.select` instead, there is no timed sleep, it just only stays
+This implementation uses `IO.select` instead, there is no timed sleep, it just stays
 there waiting for input, which will then come from a `#wake_up` call that writes on a pipe.
 
 `IO.select` should be present everywhere so this should be cross-platform and doesn't waste

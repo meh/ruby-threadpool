@@ -36,19 +36,23 @@ class ThreadPool
 	class Worker
 		include Awakenable
 
-		def initialize (watcher = nil)
-			@watcher = watcher
-			@mutex   = Mutex.new
+		def initialize (pool)
+			@pool  = pool
+			@mutex = Mutex.new
 
 			@thread = Thread.new {
 				loop do
 					if @block
-						@block.call(*@args) rescue nil
+						begin
+							@block.call(*@args)
+						rescue Exception => e
+							@pool.raise(e)
+						end
 
 						@block = nil
 						@args  = nil
 
-						@watcher.wake_up if @watcher
+						@pool.wake_up
 					else
 						sleep
 
@@ -97,24 +101,27 @@ class ThreadPool
 
 	extend Forwardable
 
-	def_delegators :@watcher, :kill, :die?, :dead?
+	attr_reader    :watcher, :size
+	def_delegators :@watcher, :sleep, :wake_up, :kill, :die?, :dead?, :join
+	def_delegators :@current, :raise
 
 	def initialize (size = 2)
 		@size    = 0
 		@queue   = Queue.new
 		@pool    = []
-		@watcher = Worker.new
+		@watcher = Worker.new(self)
+		@current = Thread.current
 		
 		@watcher.process {
 			loop do
-				@watcher.sleep if @queue.empty?
-				next           if @queue.empty?
+				sleep if @queue.empty?
+				next  if @queue.empty?
 
 				begin
-					worker = @pool.find(&:available?) or @watcher.sleep
+					worker = @pool.find(&:available?) or sleep
 				end until worker
 
-				break if @watcher.die?
+				break if die?
 
 				args, block = @queue.pop
 
@@ -127,16 +134,12 @@ class ThreadPool
 		resize(size)
 	end
 
-	def join
-		@watcher.join
-	end; alias wait join
-
 	def resize (size)
 		return if @size == size
 
 		if @size < size
 			1.upto(size - @size) {
-				@pool << Worker.new(@watcher)
+				@pool << Worker.new(self)
 			}
 		else
 			1.upto(@size - size) {
