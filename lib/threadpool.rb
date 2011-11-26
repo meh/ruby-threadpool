@@ -14,21 +14,14 @@ require 'thread'
 module Awakenable
 	def sleep (time = nil)
 		@awakenable ||= IO.pipe
-
 		@awakenable.first.read_nonblock 1337 rescue nil
 
-		unless @awakened
-			IO.select([@awakenable.first], nil, nil, time)
-		else
-			@awakened = false
-		end
+		IO.select([@awakenable.first], nil, nil, time)
 	end
 
 	def wake_up
 		@awakenable ||= IO.pipe
-
 		@awakenable.last.write 'x'
-		@awakened = true
 	end
 end
 
@@ -54,8 +47,7 @@ class ThreadPool
 
 						@pool.wake_up
 					else
-						sleep
-
+						sleep unless die?
 						break if die?
 					end
 				end
