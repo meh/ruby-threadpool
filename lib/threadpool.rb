@@ -14,7 +14,10 @@ require 'thread'
 module Awakenable
 	def sleep (time = nil)
 		@awakenable ||= IO.pipe
-		@awakenable.first.read_nonblock 1337 rescue nil
+
+		begin
+			@awakenable.first.read_nonblock 2048
+		rescue Errno::EAGAIN; end
 
 		IO.select([@awakenable.first], nil, nil, time)
 	end
