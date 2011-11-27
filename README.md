@@ -20,6 +20,8 @@ pool = ThreadPool.new
 pool.resize(4)
 
 0.upto(10) { pool.process { sleep 2; puts 'lol' } }
+
+gets # otherwise the program ends without the pool doing anything
 ```
 
 You should get 4 lols every 2 seconds.
