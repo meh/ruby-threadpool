@@ -19,12 +19,25 @@ module Awakenable
 			@awakenable.first.read_nonblock 2048
 		rescue Errno::EAGAIN; end
 
-		IO.select([@awakenable.first], nil, nil, time)
+		begin
+			IO.select([@awakenable.first], nil, nil, time)
+
+			true
+		rescue Interrupt
+			false
+		end
 	end
 
 	def wake_up
 		@awakenable ||= IO.pipe
-		@awakenable.last.write 'x'
+
+		begin
+			@awakenable.last.write 'x'
+
+			true
+		rescue
+			false
+		end
 	end
 end
 
@@ -50,7 +63,8 @@ class ThreadPool
 
 						@pool.wake_up
 					else
-						sleep unless die?
+						sleep or break unless die?
+
 						break if die?
 					end
 				end
@@ -109,11 +123,11 @@ class ThreadPool
 		
 		@watcher.process {
 			loop do
-				sleep if @queue.empty?
-				next  if @queue.empty?
+				sleep or break if @queue.empty?
+				next           if @queue.empty?
 
 				begin
-					worker = @pool.find(&:available?) or sleep
+					worker = @pool.find(&:available?) or sleep or break
 				end until worker
 
 				break if die?
