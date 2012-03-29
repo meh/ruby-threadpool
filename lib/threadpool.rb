@@ -28,6 +28,7 @@ class ThreadPool
 		@waiting       = 0
 		@shutdown      = false
 		@trim_requests = 0
+		@auto_trim     = false
 
 		@mutex.synchronize {
 			min.times {
@@ -35,6 +36,10 @@ class ThreadPool
 			}
 		}
 	end
+
+	def auto_trim?;    @auto_trim;         end
+	def auto_trim!;    @auto_trim = true;  end
+	def no_auto_trim!; @auto_trim = false; end
 
 	def resize (min, max = nil)
 		@min = min
@@ -128,6 +133,8 @@ private
 				break unless continue
 
 				(work.last || @block).call(*work.first)
+
+				trim if auto_trim? && @spawned > @min
 			end
 
 			@mutex.synchronize {
