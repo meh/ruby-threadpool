@@ -1,9 +1,9 @@
 Gem::Specification.new {|s|
 	s.name         = 'threadpool'
-	s.version      = '0.0.3'
+	s.version      = '0.1.0'
 	s.author       = 'meh.'
 	s.email        = 'meh@paranoici.org'
-	s.homepage     = 'http://github.com/meh/threadpool'
+	s.homepage     = 'http://github.com/meh/ruby-threadpool'
 	s.platform     = Gem::Platform::RUBY
 	s.summary      = 'A simple no-wasted-resources thread pool implementation.'
 
