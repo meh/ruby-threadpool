@@ -1,6 +1,6 @@
 Gem::Specification.new {|s|
 	s.name         = 'threadpool'
-	s.version      = '0.1.0'
+	s.version      = '0.1.0.1'
 	s.author       = 'meh.'
 	s.email        = 'meh@paranoici.org'
 	s.homepage     = 'http://github.com/meh/ruby-threadpool'
