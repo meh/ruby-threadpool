@@ -55,6 +55,10 @@ class ThreadPool
 	end
 
 	def process (*args, &block)
+		unless block || @block
+			raise ArgumentError, 'you must pass a block'
+		end
+
 		@mutex.synchronize {
 			raise 'unable to add work while shutting down' if @shutdown
 
