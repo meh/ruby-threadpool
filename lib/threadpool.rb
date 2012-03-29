@@ -8,146 +8,136 @@
 #  0. You just DO WHAT THE FUCK YOU WANT TO.
 #++
 
-require 'forwardable'
 require 'thread'
 
-module Awakenable
-	def sleep (time = nil)
-		@awakenable ||= IO.pipe
-
-		begin
-			@awakenable.first.read_nonblock 2048
-		rescue Errno::EAGAIN; end
-
-		IO.select([@awakenable.first], nil, nil, time)
-	end
-
-	def wake_up
-		@awakenable ||= IO.pipe
-
-		@awakenable.last.write 'x'
-	end
-end
-
 class ThreadPool
-	class Worker
-		include Awakenable
+	attr_reader :min, :max, :spawned
 
-		def initialize (pool)
-			@pool  = pool
-			@mutex = Mutex.new
+	def initialize (min, max = nil, &block)
+		@min   = min
+		@max   = max || min
+		@block = block
 
-			@thread = Thread.new {
-				loop do
-					if @block
-						begin
-							@block.call(*@args)
-						rescue Exception => e
-							@pool.raise(e)
-						end
+		@cond  = ConditionVariable.new
+		@mutex = Mutex.new
 
-						@block = nil
-						@args  = nil
+		@todo    = []
+		@workers = []
 
-						@pool.wake_up
-					else
-						sleep unless die?
-						break if die?
-					end
-				end
+		@spawned       = 0
+		@waiting       = 0
+		@shutdown      = false
+		@trim_requests = 0
+
+		@mutex.synchronize {
+			min.times {
+				spawn_thread
 			}
-		end
-
-		def available?
-			@mutex.synchronize {
-				!@block
-			}
-		end
-
-		def process (*args, &block)
-			return unless available?
-
-			@mutex.synchronize {
-				@block = block
-				@args  = args
-
-				wake_up
-			}
-		end
-
-		def join
-			@thread.join
-		end
-
-		def kill
-			return if die?
-
-			@die = true
-			wake_up
-		end
-
-		def die?
-			@die
-		end
-
-		def dead?
-			@thread.stop?
-		end
-	end
-
-	extend Forwardable
-
-	attr_reader    :watcher, :size
-	def_delegators :@watcher, :sleep, :wake_up, :kill, :die?, :dead?, :join
-	def_delegators :@current, :raise
-
-	def initialize (size = 2)
-		@size    = 0
-		@queue   = Queue.new
-		@pool    = []
-		@watcher = Worker.new(self)
-		@current = Thread.current
-		
-		@watcher.process {
-			loop do
-				sleep if @queue.empty?
-				next  if @queue.empty?
-
-				begin
-					worker = @pool.find(&:available?) or sleep
-				end until worker
-
-				break if die?
-
-				args, block = @queue.pop
-
-				worker.process(*args, &block)
-			end
-
-			@pool.each(&:kill)
 		}
-
-		resize(size)
 	end
 
-	def resize (size)
-		return if @size == size
+	def resize (min, max = nil)
+		@min = min
+		@max = max || min
 
-		if @size < size
-			1.upto(size - @size) {
-				@pool << Worker.new(self)
-			}
-		else
-			1.upto(@size - size) {
-				@pool.pop.kill
-			}
-		end
+		trim!
+	end
 
-		@size = size
+	def backlog
+		@mutex.synchronize {
+			@todo.length
+		}
 	end
 
 	def process (*args, &block)
-		@queue.push([args, block])
-		@watcher.wake_up
-	end; alias do process
+		@mutex.synchronize {
+			raise 'unable to add work while shutting down' if @shutdown
+
+			@todo << [args, block]
+
+			if @waiting == 0 && @spawned < @max
+				spawn_thread
+			end
+
+			@cond.signal
+		}
+	end
+
+	alias << process
+
+	def trim (force = false)
+		@mutex.synchronize {
+			if (force || @waiting > 0) && @spawned - @trim_requests > @min
+				@trim_requests -= 1
+				@cond.signal
+			end
+		}
+	end
+
+	def trim!
+		trim true
+	end
+
+	def shutdown
+		@mutex.synchronize {
+			@shutdown = true
+			@cond.broadcast
+		}
+
+		@workers.first.join until @workers.empty?
+	end
+
+private
+	def spawn_thread
+		@spawned += 1
+
+		thread = Thread.new {
+			loop do
+				work     = nil
+				continue = true
+
+				@mutex.synchronize {
+					while @todo.empty?
+						if @trim_requests > 0
+							@trim_requests -= 1
+							continue = false
+
+							break
+						end
+
+						if @shutdown
+							continue = false
+
+							break
+						end
+
+						@waiting += 1
+						@cond.wait @mutex
+						@waiting -= 1
+
+						if @shutdown
+							continue = false
+
+							break
+						end
+					end
+
+					work = @todo.shift if continue
+				}
+
+				break unless continue
+
+				(work.last || @block).call(*work.first)
+			end
+
+			@mutex.synchronize {
+				@spawned -= 1
+				@workers.delete thread
+			}
+		}
+
+		@workers << thread
+
+		thread
+	end
 end
