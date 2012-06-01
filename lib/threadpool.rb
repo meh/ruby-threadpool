@@ -11,6 +11,72 @@
 require 'thread'
 
 class ThreadPool
+	class Task
+		Timeout = Class.new(Exception)
+		Asked   = Class.new(Exception)
+
+		attr_reader :pool, :timeout, :exception, :thread, :started_at
+
+		def initialize (pool, *args, &block)
+			@pool      = pool
+			@arguments = args
+			@block     = block
+		end
+
+		def running?;    @running;   end
+		def finished?;   @finished;   end
+		def timeout?;    @timedout;   end
+		def terminated?; @terminated; end
+
+		def execute (thread)
+			return if terminated? || running? || finished?
+
+			@thread     = thread
+			@running    = true
+			@started_at = Time.now
+
+			pool.wake_up_timeout
+
+			begin
+				@block.call(*@arguments)
+			rescue Exception => e
+				if e.is_a? Timeout
+					@timedout = true
+				elsif e.is_a? Asked
+					return
+				else
+					@exception = reason
+				end
+			end
+
+			@running  = false
+			@finished = true
+			@thread   = nil
+		end
+
+		def terminate! (exception = Asked)
+			return if terminated? || finished? || timeout?
+
+			@terminated = true
+
+			return unless running?
+
+			@thread.raise exception
+		end
+
+		def timeout!
+			terminate! Timeout
+		end
+
+		def timeout_after (time)
+			@timeout = time
+
+			pool.timeout_for self, time
+
+			self
+		end
+	end
+
 	attr_reader :min, :max, :spawned
 
 	def initialize (min, max = nil, &block)
@@ -21,8 +87,9 @@ class ThreadPool
 		@cond  = ConditionVariable.new
 		@mutex = Mutex.new
 
-		@todo    = []
-		@workers = []
+		@todo     = []
+		@workers  = []
+		@timeouts = {}
 
 		@spawned       = 0
 		@waiting       = 0
@@ -36,6 +103,8 @@ class ThreadPool
 			}
 		}
 	end
+
+	def shutdown?; @shutdown; end
 
 	def auto_trim?;    @auto_trim;         end
 	def auto_trim!;    @auto_trim = true;  end
@@ -59,10 +128,12 @@ class ThreadPool
 			raise ArgumentError, 'you must pass a block'
 		end
 
-		@mutex.synchronize {
-			raise 'unable to add work while shutting down' if @shutdown
+		task = Task.new(self, *args, &(block || @block))
 
-			@todo << [args, block]
+		@mutex.synchronize {
+			raise 'unable to add work while shutting down' if shutdown?
+
+			@todo << task
 
 			if @waiting == 0 && @spawned < @max
 				spawn_thread
@@ -70,6 +141,8 @@ class ThreadPool
 
 			@cond.signal
 		}
+
+		task
 	end
 
 	alias << process
@@ -81,6 +154,8 @@ class ThreadPool
 				@cond.signal
 			end
 		}
+
+		self
 	end
 
 	def trim!
@@ -93,7 +168,45 @@ class ThreadPool
 			@cond.broadcast
 		}
 
+		wake_up_timeout
+
+		join
+	end
+
+	def join
+		@timeout.join if @timeout
+
 		@workers.first.join until @workers.empty?
+
+		self
+	end
+
+	def timeout_for (task, timeout)
+		unless @timeout
+			spawn_timeout_thread
+		end
+
+		@mutex.synchronize {
+			@timeouts[task] = timeout
+
+			wake_up_timeout
+		}
+	end
+
+	def shutdown_after (timeout)
+		Thread.new {
+			sleep timeout
+
+			shutdown
+		}
+
+		self
+	end
+
+	def wake_up_timeout
+		if @pipes
+			@pipes.last.write_nonblock 'x' rescue nil
+		end
 	end
 
 private
@@ -102,7 +215,7 @@ private
 
 		thread = Thread.new {
 			loop do
-				work     = nil
+				task     = nil
 				continue = true
 
 				@mutex.synchronize {
@@ -114,7 +227,7 @@ private
 							break
 						end
 
-						if @shutdown
+						if shutdown?
 							continue = false
 
 							break
@@ -124,19 +237,19 @@ private
 						@cond.wait @mutex
 						@waiting -= 1
 
-						if @shutdown
+						if shutdown?
 							continue = false
 
 							break
 						end
 					end
 
-					work = @todo.shift if continue
+					task = @todo.shift if continue
 				}
 
-				break unless continue
+				break if !continue || shutdown?
 
-				(work.last || @block).call(*work.first)
+				task.execute(thread)
 
 				trim if auto_trim? && @spawned > @min
 			end
@@ -150,5 +263,41 @@ private
 		@workers << thread
 
 		thread
+	end
+	
+	def spawn_timeout_thread
+		@pipes = IO.pipe
+
+		@timeout = Thread.new {
+			loop do
+				now     = Time.now
+				timeout = @timeouts.map {|task, timeout|
+					next unless task.started_at
+
+					now - task.started_at + task.timeout
+				}.compact.min unless @timeouts.empty?
+
+				readable, = IO.select([@pipes.first], nil, nil, timeout)
+
+				break if shutdown?
+
+				if readable && !readable.empty?
+					readable.first.read_nonblock 1024
+				end
+
+				now = Time.now
+				@timeouts.each {|task, time|
+					next if !task.started_at || task.terminated? || task.finished?
+
+					if now > task.started_at + task.timeout
+						task.timeout!
+					end
+				}
+
+				@timeouts.reject! { |task, _| task.terminated? || task.finished? }
+				
+				break if shutdown?
+			end
+		}
 	end
 end
