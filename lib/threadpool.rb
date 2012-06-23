@@ -215,41 +215,31 @@ private
 
 		thread = Thread.new {
 			loop do
-				task     = nil
-				continue = true
+				task = @mutex.synchronize {
+					if @todo.empty?
+						while @todo.empty?
+							if @trim_requests > 0
+								@trim_requests -= 1
 
-				@mutex.synchronize {
-					while @todo.empty?
-						if @trim_requests > 0
-							@trim_requests -= 1
-							continue = false
+								break
+							end
 
-							break
-						end
+							break if shutdown?
 
-						if shutdown?
-							continue = false
+							@waiting += 1
+							@cond.wait @mutex
+							@waiting -= 1
 
-							break
-						end
-
-						@waiting += 1
-						@cond.wait @mutex
-						@waiting -= 1
-
-						if shutdown?
-							continue = false
-
-							break
-						end
+							break !shutdown?
+						end or break
 					end
 
-					task = @todo.shift if continue
-				}
-
-				break if !continue || shutdown?
+					@todo.shift
+				} or break
 
 				task.execute(thread)
+
+				break if shutdown?
 
 				trim if auto_trim? && @spawned > @min
 			end
@@ -266,8 +256,7 @@ private
 	end
 	
 	def spawn_timeout_thread
-		@pipes = IO.pipe
-
+		@pipes   = IO.pipe
 		@timeout = Thread.new {
 			loop do
 				now     = Time.now
