@@ -162,13 +162,17 @@ class ThreadPool
 		trim true
 	end
 
-	def shutdown
+	def shutdown!
 		@mutex.synchronize {
 			@shutdown = true
 			@cond.broadcast
 		}
 
 		wake_up_timeout
+	end
+
+	def shutdown
+		shutdown!
 
 		join
 	end
