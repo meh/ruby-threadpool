@@ -1,5 +1,8 @@
 ThreadPool - an implementation that doesn't waste CPU resources
 ===============================================================
+
+**GEM MERGED INTO THREAD, THIS IS UNMAINTAINED NOW: https://github.com/meh/ruby-thread**
+
 All the implementations I looked at were either buggy or wasted CPU resources
 for no apparent reason, for example used a sleep of 0.01 seconds to then check for
 readiness and stuff like this.
